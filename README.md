@@ -1,192 +1,114 @@
 # Task Service
 
-> Service de gestion collaborative de la liste de tâches
+> Service de gestion collaborative des tâches de voyage
 
 ## Rôle dans l'architecture
 
-Le Task Service gère la liste collaborative de tâches (to-do list) du voyage. Les participants créent, modifient et
-terminent des tâches avec deadlines, priorités et assignations. Le service envoie automatiquement des rappels 24h avant
-la deadline, supporte les sous-tâches (1 niveau), et publie des événements pour que les autres services (notamment
-notifications) puissent alerter les utilisateurs.
+Le Task Service gère la liste des tâches à accomplir avant et pendant le voyage. Il supporte les sous-tâches
+(un niveau de profondeur max), les assignations, les priorités et les deadlines. Un scheduler interne publie
+des rappels de deadline via RabbitMQ. L'appartenance au trip est vérifiée via gRPC avant chaque opération.
 
 ## Fonctionnalités
 
-- Création et gestion des tâches avec titre, description et deadline
-- Assignation des tâches à des participants
-- Hiérarchie de tâches (support des sous-tâches, 1 niveau)
-- Priorités : HAUTE, MOYENNE, BASSE
-- Statuts : À_FAIRE, EN_COURS, TERMINÉE
-- Rappels automatiques 24h avant la deadline
-- Historique des modifications
-- Attributs de suivi : avancement, date de création, date de modification
-- Publication d'événements pour les notifications
+- Création de tâches et sous-tâches (1 niveau max)
+- Assignation à un membre du trip
+- Priorités : HIGH / MEDIUM / LOW
+- Statuts : TODO / IN_PROGRESS / DONE
+- Deadlines avec rappels automatiques (scheduler)
+- Vérification d'appartenance via gRPC (TripService.CheckMembership)
 
 ## Endpoints REST
 
-| Méthode | Endpoint                       | Description               |
-|---------|--------------------------------|---------------------------|
-| POST    | `/api/trips/{tripId}/tasks`    | Créer une tâche           |
-| GET     | `/api/trips/{tripId}/tasks`    | Lister les tâches         |
-| GET     | `/api/tasks/{taskId}`          | Récupérer une tâche       |
-| PUT     | `/api/tasks/{taskId}`          | Modifier une tâche        |
-| DELETE  | `/api/tasks/{taskId}`          | Supprimer une tâche       |
-| PUT     | `/api/tasks/{taskId}/status`   | Changer le statut         |
-| POST    | `/api/tasks/{taskId}/assign`   | Assigner à un participant |
-| POST    | `/api/tasks/{taskId}/subtasks` | Créer une sous-tâche      |
-| GET     | `/api/tasks/{taskId}/subtasks` | Lister les sous-tâches    |
-| PUT     | `/api/tasks/{subtaskId}`       | Modifier une sous-tâche   |
-| DELETE  | `/api/tasks/{subtaskId}`       | Supprimer une sous-tâche  |
+| Méthode | Endpoint | Description |
+|---------|----------|-------------|
+| POST | `/api/v1/trips/{id}/tasks` | Créer une tâche |
+| GET | `/api/v1/trips/{id}/tasks` | Liste (filtrable par status / assignee / priority) |
+| PUT | `/api/v1/tasks/{id}` | Modifier une tâche |
+| PATCH | `/api/v1/tasks/{id}/status` | Changer le statut uniquement |
+| DELETE | `/api/v1/tasks/{id}` | Supprimer une tâche |
 
-## Modèle de données
+## gRPC Client
 
-**Task**
+- `TripService.CheckMembership(tripId, userId)` — vérification d'appartenance avant chaque opération
 
-- `id` (UUID) : identifiant unique
-- `trip_id` (UUID, FK) : voyage associé
-- `title` (String) : titre de la tâche
-- `description` (String, nullable) : description détaillée
-- `deadline` (LocalDateTime, nullable) : date limite
-- `assigned_to` (UUID, nullable) : ID Keycloak de l'assigné
-- `priority` (ENUM: HIGH, MEDIUM, LOW) : priorité
-- `status` (ENUM: TODO, IN_PROGRESS, DONE) : statut
-- `created_by` (UUID) : ID Keycloak du créateur
-- `progress` (Integer, default: 0) : pourcentage d'avancement (0-100)
-- `created_at` (Timestamp)
-- `updated_at` (Timestamp)
-- `completed_at` (Timestamp, nullable)
+## Modèle de données (`db_task`)
 
-**Subtask**
+**task**
 
-- `id` (UUID)
-- `task_id` (UUID, FK) : tâche parente
-- `title` (String)
-- `status` (ENUM: TODO, IN_PROGRESS, DONE)
-- `assigned_to` (UUID, nullable)
-- `created_at` (Timestamp)
-- `updated_at` (Timestamp)
+| Colonne | Type | Description |
+|---------|------|-------------|
+| `id` | UUID PK | Identifiant unique (UUID v7) |
+| `trip_id` | UUID NOT NULL | Référence au trip |
+| `parent_task_id` | UUID NULLABLE FK→task | Référence à la tâche parente (1 niveau max) |
+| `title` | VARCHAR(255) NOT NULL | Titre de la tâche |
+| `description` | TEXT NULLABLE | Description |
+| `assignee_id` | UUID NULLABLE | keycloak_id du membre assigné |
+| `status` | ENUM NOT NULL | TODO / IN_PROGRESS / DONE |
+| `priority` | ENUM NOT NULL | HIGH / MEDIUM / LOW |
+| `deadline` | TIMESTAMP NULLABLE | Date limite |
+| `created_by` | UUID NOT NULL | keycloak_id du créateur |
+| `completed_at` | TIMESTAMP NULLABLE | Date de complétion |
+| `created_at` | TIMESTAMP NOT NULL | |
+| `updated_at` | TIMESTAMP NOT NULL | |
 
-**TaskReminder**
-
-- `id` (UUID)
-- `task_id` (UUID, FK)
-- `reminder_type` (ENUM: DEADLINE_24H, DEADLINE_1H, DEADLINE_REACHED)
-- `triggered_at` (Timestamp, nullable)
-- `next_trigger_at` (Timestamp)
-
-## Événements (RabbitMQ)
+## Événements RabbitMQ (Exchange : `plantogether.events`)
 
 **Publie :**
 
-- `TaskCreated` — Émis lors de la création d'une tâche
-- `TaskAssigned` — Émis lors d'une assignation
-- `TaskStatusChanged` — Émis lors du changement de statut
-- `TaskCompleted` — Émis quand une tâche passe au statut DONE
-- `DeadlineReminder` — Émis 24h avant la deadline
-- `DeadlineReached` — Émis quand la deadline est atteinte
+| Routing Key | Déclencheur |
+|-------------|-------------|
+| `task.assigned` | Tâche assignée à un membre |
+| `task.deadline.reminder` | Rappel automatique (scheduler, avant deadline) |
 
-**Consomme :**
-
-- `TripCreated` — Pour initialiser les tâches types du voyage
-- `MemberJoined` — Pour mettre à jour les assignations possibles
+**Consomme :** aucun
 
 ## Configuration
 
 ```yaml
 server:
   port: 8085
-  servlet:
-    context-path: /
 
 spring:
   application:
     name: plantogether-task-service
+  datasource:
+    url: jdbc:postgresql://postgres:5432/db_task
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: false
-  datasource:
-    url: jdbc:postgresql://postgres:5432/plantogether_task
-    username: ${DB_USER}
-    password: ${DB_PASSWORD}
-  rabbitmq:
-    host: ${RABBITMQ_HOST:rabbitmq}
-    port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USER}
-    password: ${RABBITMQ_PASSWORD}
-  redis:
-    host: ${REDIS_HOST:redis}
-    port: ${REDIS_PORT:6379}
 
-keycloak:
-  serverUrl: ${KEYCLOAK_SERVER_URL:http://keycloak:8080}
-  realm: ${KEYCLOAK_REALM:plantogether}
-  clientId: ${KEYCLOAK_CLIENT_ID}
-
-scheduler:
-  reminders:
-    enabled: true
-    interval: PT1H  # Vérifier chaque heure
+grpc:
+  client:
+    trip-service:
+      address: static://trip-service:9081
+  server:
+    port: 9085
 ```
 
 ## Lancer en local
 
 ```bash
-# Prérequis : Docker Compose (infra), Java 21+, Maven 3.9+
+# Prérequis : docker compose --profile essential up -d
+# + plantogether-proto et plantogether-common installés
 
-# Option 1 : Maven
 mvn spring-boot:run
-
-# Option 2 : Docker
-docker build -t plantogether-task-service .
-docker run -p 8085:8081 \
-  -e KEYCLOAK_SERVER_URL=http://host.docker.internal:8080 \
-  -e DB_USER=postgres \
-  -e DB_PASSWORD=postgres \
-  plantogether-task-service
 ```
 
 ## Dépendances
 
-- **Keycloak 24+** : authentification et autorisation
-- **PostgreSQL 16** : persistance des tâches
-- **RabbitMQ** : publication d'événements
-- **Redis** : cache des tâches actives
-- **Spring Boot 3.3.6** : framework web
-- **Spring Scheduling** : tâches planifiées (rappels)
-- **Spring Cloud Netflix Eureka** : service discovery
+- **Keycloak 24+** : validation JWT
+- **PostgreSQL 16** (`db_task`) : tâches et sous-tâches
+- **RabbitMQ** : publication d'événements (`task.assigned`, `task.deadline.reminder`)
+- **Redis** : rate limiting (Bucket4j)
+- **Trip Service** (gRPC 9081) : vérification d'appartenance au trip
+- **plantogether-proto** : contrats gRPC (client + serveur)
+- **plantogether-common** : DTOs events, CorsConfig
 
-## Logique métier
+## Sécurité
 
-### Calcul du pourcentage d'avancement (tâche parente)
-
-```
-Si la tâche a des sous-tâches :
-  progression = (nombre_sous-tâches_DONE / nombre_total_sous-tâches) × 100
-Sinon :
-  progression = valeur définie manuellement
-```
-
-### Rappels automatiques
-
-Un job planifié s'exécute toutes les heures pour :
-
-1. Trouver les tâches avec deadline dans les 24h
-2. Publier un événement `DeadlineReminder`
-3. Marquer comme "rappel envoyé" pour ne pas dupliquer
-
-Le service de notifications se charge de l'envoi du message utilisateur.
-
-## Notes de sécurité
-
-- Seul le créateur ou un organisateur peut modifier une tâche
-- Seul l'assigné ou un organisateur peut changer le statut
-- Tous les endpoints requièrent authentification Keycloak
-- Les dates passées sont acceptées pour suivi des tâches historiques
-- Zéro PII stockée (seuls les UUIDs Keycloak)
-
-## Bonnes pratiques
-
-- Limiter les tâches à un titre court (<100 caractères)
-- Les sous-tâches aident à suivre les tâches complexes
-- Les priorités aident à organiser le travail du groupe
-- Les deadlines sont affichées en temps local de chaque utilisateur
+- Tous les endpoints requièrent un token Bearer Keycloak valide
+- L'appartenance au trip est vérifiée via gRPC avant chaque opération
+- Seul le créateur ou l'ORGANIZER peut supprimer une tâche
+- Zero PII stockée (uniquement des `keycloak_id`)

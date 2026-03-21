@@ -1,17 +1,20 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude when working with code in this repository.
 
 ## Commands
 
 ```bash
 # Build
-mvn package
+mvn clean package -DskipTests
 
-# Run (requires infrastructure)
+# Build with tests
+mvn clean package
+
+# Run locally
 mvn spring-boot:run
 
-# Run tests
+# Run all tests
 mvn test
 
 # Run a single test class
@@ -20,53 +23,119 @@ mvn test -Dtest=MyTestClass
 # Run a single test method
 mvn test -Dtest=MyTestClass#myMethod
 
-# Skip tests during build
-mvn package -DskipTests
-
 # Docker build
 docker build -t plantogether-task-service .
 ```
 
+**Prerequisites:** install shared libs first:
+```bash
+cd ../plantogether-proto && mvn clean install
+cd ../plantogether-common && mvn clean install
+```
+
 ## Architecture
 
-This is a Spring Boot 3.3.6 microservice (Java 21) within the PlanTogether platform. It manages collaborative trip task lists.
+Spring Boot 3.3.6 microservice (Java 21). Manages trip task lists, assignments, priorities, deadlines, and subtasks.
+
+**Ports:** REST `8085` · gRPC `9085` (server — reserved for future consumers)
 
 **Package:** `com.plantogether.task`
 
-**Port:** 8085 (local), 8080 (Docker container)
+### Package structure
+
+```
+com.plantogether.task/
+├── config/          # SecurityConfig, RabbitConfig, SchedulerConfig
+├── controller/      # REST controllers
+├── domain/          # JPA entities (Task)
+├── repository/      # Spring Data JPA
+├── service/         # Business logic + DeadlineReminderScheduler
+├── dto/             # Request/Response DTOs (Lombok @Data @Builder)
+├── grpc/
+│   └── client/      # TripGrpcClient (CheckMembership → trip-service:9081)
+└── event/
+    └── publisher/   # RabbitMQ publishers (TaskAssigned, TaskDeadlineReminder)
+```
 
 ### Infrastructure dependencies
 
-- **PostgreSQL** (`plantogether_task` DB) — task persistence
-- **RabbitMQ** — publishes task events; consumes `TripCreated` and `MemberJoined`
-- **Redis** — caches active tasks
-- **Keycloak** (realm: `plantogether`) — JWT auth via OIDC
-- **Eureka** — service discovery
+| Dependency | Default (local) | Purpose |
+|---|---|---|
+| PostgreSQL 16 | `localhost:5432/plantogether_task` | Primary persistence (db_task) |
+| RabbitMQ | `localhost:5672` | Event publishing |
+| Redis | `localhost:6379` | Caching active tasks |
+| Keycloak 24+ | `localhost:8180` realm `plantogether` | JWT validation via JWKS |
+| trip-service gRPC | `localhost:9081` | CheckMembership before every write |
 
-### Key design patterns
 
-**Security:** Stateless JWT via `KeycloakJwtConverter`, which extracts `realm_access.roles` from the Keycloak token and maps them to `ROLE_<ROLENAME>` Spring authorities. The principal name is set to `jwt.getSubject()` (Keycloak user UUID). Only `/actuator/health` and `/actuator/info` are public; everything else requires authentication.
+### Domain model (db_task)
 
-**Authorization rules:** Only task creator or trip organizer can edit; only assignee or organizer can change status. Zero PII stored — only Keycloak UUIDs.
+**`task`** — single table for both tasks and subtasks (self-referential FK):
 
-**Database migrations:** Flyway is used (`ddl-auto: validate`). Migration files go in `src/main/resources/db/migration/` following the `V{n}__{description}.sql` naming convention. The initial schema (`V1__init_schema.sql`) is currently empty — tables for `Task`, `Subtask`, and `TaskReminder` need to be created.
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID | PK |
+| trip_id | UUID | NOT NULL |
+| parent_task_id | UUID | FK → task.id (nullable — 1 level max, no deep nesting) |
+| title | VARCHAR(255) | NOT NULL |
+| description | TEXT | NULLABLE |
+| assignee_id | UUID | Keycloak UUID of assignee (nullable) |
+| status | ENUM | `TODO` / `IN_PROGRESS` / `DONE` |
+| priority | ENUM | `HIGH` / `MEDIUM` / `LOW` |
+| deadline | TIMESTAMP | NULLABLE |
+| created_by | UUID | Keycloak UUID |
+| completed_at | TIMESTAMP | NULLABLE — set when status → DONE |
+| created_at | TIMESTAMP | NOT NULL |
+| updated_at | TIMESTAMP | NOT NULL |
 
-**Exception handling:** `GlobalExceptionHandler` uses `plantogether-common` library types (`ResourceNotFoundException`, `AccessDeniedException`, `ErrorResponse`).
+Subtasks: rows where `parent_task_id IS NOT NULL`. Maximum 1 level of nesting (subtasks cannot have subtasks).
 
-**Events (RabbitMQ):**
-- Publishes: `TaskCreated`, `TaskAssigned`, `TaskStatusChanged`, `TaskCompleted`, `DeadlineReminder`, `DeadlineReached`
-- Consumes: `TripCreated`, `MemberJoined`
+### gRPC client
 
-**Scheduled jobs:** A reminder job runs hourly (`scheduler.reminders.interval: PT1H`) to publish `DeadlineReminder` events 24h before deadlines.
+Calls `TripGrpcService.CheckMembership(tripId, userId)` on trip-service:9081 before every write operation.
 
-### Domain model
+### REST API (`/api/v1/`)
 
-- `Task` — UUID id, trip_id, title, description, deadline, assigned_to (Keycloak UUID), priority (HIGH/MEDIUM/LOW), status (TODO/IN_PROGRESS/DONE), created_by, progress (0-100), timestamps
-- `Subtask` — UUID id, task_id (FK), title, status, assigned_to, timestamps
-- `TaskReminder` — UUID id, task_id (FK), reminder_type (DEADLINE_24H/DEADLINE_1H/DEADLINE_REACHED), triggered_at, next_trigger_at
+| Method | Endpoint | Auth | Notes |
+|---|---|---|---|
+| POST | `/api/v1/trips/{tripId}/tasks` | Bearer JWT + member | Create task or subtask |
+| GET | `/api/v1/trips/{tripId}/tasks` | Bearer JWT + member | List (filterable: `?status=TODO&assignee=uuid&priority=HIGH`) |
+| PUT | `/api/v1/tasks/{id}` | Bearer JWT + creator or ORGANIZER | Modify task |
+| PATCH | `/api/v1/tasks/{id}/status` | Bearer JWT + assignee or ORGANIZER | Change status |
+| DELETE | `/api/v1/tasks/{id}` | Bearer JWT + creator or ORGANIZER | Delete task |
 
-Progress calculation: if subtasks exist, progress = (DONE subtasks / total subtasks) × 100; otherwise manually set.
+### Scheduler
 
-### Common library
+`DeadlineReminderScheduler` runs on a configurable interval (e.g. hourly) to scan for tasks with deadlines within
+the next 24h and publish `task.deadline.reminder` events for notification-service.
 
-The `plantogether-common` (v1.0.0-SNAPSHOT) dependency provides shared exception types and `ErrorResponse`. It must be available in the local Maven repository.
+### RabbitMQ events
+
+**Publishes** (exchange `plantogether.events`):
+- `task.assigned` — routing key `task.assigned` — when `assignee_id` is set or changed
+- `task.deadline.reminder` — routing key `task.deadline.reminder` — emitted by scheduler for upcoming deadlines
+
+This service does **not** consume any events.
+
+### Security
+
+- Stateless JWT via `KeycloakJwtConverter` — `realm_access.roles` → `ROLE_<ROLE>` Spring authorities
+- Principal name = Keycloak subject UUID
+- Public endpoints: `/actuator/health`, `/actuator/info`
+- Authorization: only task creator or ORGANIZER can edit/delete; only assignee or ORGANIZER can change status
+- Zero PII stored — only Keycloak UUIDs
+
+### Environment variables
+
+| Variable | Default |
+|---|---|
+| `DB_HOST` | `localhost` |
+| `DB_USER` | `plantogether` |
+| `DB_PASSWORD` | `plantogether` |
+| `RABBITMQ_HOST` | `localhost` |
+| `RABBITMQ_PORT` | `5672` |
+| `REDIS_HOST` | `localhost` |
+| `KEYCLOAK_URL` | `http://localhost:8180` |
+| `TRIP_SERVICE_GRPC_HOST` | `localhost` |
+| `TRIP_SERVICE_GRPC_PORT` | `9081` |
+
