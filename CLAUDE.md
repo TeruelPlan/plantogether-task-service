@@ -35,7 +35,7 @@ cd ../plantogether-common && mvn clean install
 
 ## Architecture
 
-Spring Boot 3.3.6 microservice (Java 21). Manages trip task lists, assignments, priorities, deadlines, and subtasks.
+Spring Boot 3.3.6 microservice (Java 25). Manages trip task lists, assignments, priorities, deadlines, and subtasks.
 
 **Ports:** REST `8085` · gRPC `9085` (server — reserved for future consumers)
 
