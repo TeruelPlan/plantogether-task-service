@@ -1,66 +1,66 @@
 # Task Service
 
-> Service de gestion collaborative des tâches de voyage
+> Collaborative trip task management service
 
-## Rôle dans l'architecture
+## Role in the Architecture
 
-Le Task Service gère la liste des tâches à accomplir avant et pendant le voyage. Il supporte les sous-tâches
-(un niveau de profondeur max), les assignations, les priorités et les deadlines. Un scheduler interne publie
-des rappels de deadline via RabbitMQ. L'appartenance au trip est vérifiée via gRPC avant chaque opération.
+The Task Service manages the to-do list for trips. It supports subtasks (one level deep max),
+assignments, priorities, and deadlines. An internal scheduler publishes deadline reminders via RabbitMQ.
+Trip membership is verified via gRPC before each operation.
 
-## Fonctionnalités
+## Features
 
-- Création de tâches et sous-tâches (1 niveau max)
-- Assignation à un membre du trip
-- Priorités : HIGH / MEDIUM / LOW
-- Statuts : TODO / IN_PROGRESS / DONE
-- Deadlines avec rappels automatiques (scheduler)
-- Vérification d'appartenance via gRPC (TripService.CheckMembership)
+- Task and subtask creation (1 level max)
+- Assignment to a trip member
+- Priorities: HIGH / MEDIUM / LOW
+- Statuses: TODO / IN_PROGRESS / DONE
+- Deadlines with automatic reminders (scheduler)
+- Membership verification via gRPC (TripService.IsMember)
 
-## Endpoints REST
+## REST Endpoints
 
-| Méthode | Endpoint | Description |
-|---------|----------|-------------|
-| POST | `/api/v1/trips/{id}/tasks` | Créer une tâche |
-| GET | `/api/v1/trips/{id}/tasks` | Liste (filtrable par status / assignee / priority) |
-| PUT | `/api/v1/tasks/{id}` | Modifier une tâche |
-| PATCH | `/api/v1/tasks/{id}/status` | Changer le statut uniquement |
-| DELETE | `/api/v1/tasks/{id}` | Supprimer une tâche |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/trips/{id}/tasks` | Create a task |
+| GET | `/api/v1/trips/{id}/tasks` | List (filterable by status / assignee / priority) |
+| PUT | `/api/v1/tasks/{id}` | Update a task |
+| PATCH | `/api/v1/tasks/{id}/status` | Change status only |
+| DELETE | `/api/v1/tasks/{id}` | Delete a task |
 
 ## gRPC Client
 
-- `TripService.CheckMembership(tripId, userId)` — vérification d'appartenance avant chaque opération
+- `TripService.IsMember(tripId, deviceId)` — membership verification before each operation
 
-## Modèle de données (`db_task`)
+## Data Model (`db_task`)
 
 **task**
 
-| Colonne | Type | Description |
-|---------|------|-------------|
-| `id` | UUID PK | Identifiant unique (UUID v7) |
-| `trip_id` | UUID NOT NULL | Référence au trip |
-| `parent_task_id` | UUID NULLABLE FK→task | Référence à la tâche parente (1 niveau max) |
-| `title` | VARCHAR(255) NOT NULL | Titre de la tâche |
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Unique identifier (UUID v7) |
+| `trip_id` | UUID NOT NULL | Trip reference |
+| `parent_task_id` | UUID NULLABLE FK→task | Parent task reference (1 level max) |
+| `title` | VARCHAR(255) NOT NULL | Task title |
 | `description` | TEXT NULLABLE | Description |
-| `assignee_id` | UUID NULLABLE | keycloak_id du membre assigné |
+| `assignee_id` | UUID NULLABLE | device_id of the assigned member |
 | `status` | ENUM NOT NULL | TODO / IN_PROGRESS / DONE |
 | `priority` | ENUM NOT NULL | HIGH / MEDIUM / LOW |
-| `deadline` | TIMESTAMP NULLABLE | Date limite |
-| `created_by` | UUID NOT NULL | keycloak_id du créateur |
-| `completed_at` | TIMESTAMP NULLABLE | Date de complétion |
+| `deadline` | TIMESTAMP NULLABLE | Due date |
+| `created_by` | UUID NOT NULL | device_id of the creator |
+| `completed_at` | TIMESTAMP NULLABLE | Completion date |
 | `created_at` | TIMESTAMP NOT NULL | |
 | `updated_at` | TIMESTAMP NOT NULL | |
 
-## Événements RabbitMQ (Exchange : `plantogether.events`)
+## RabbitMQ Events (Exchange: `plantogether.events`)
 
-**Publie :**
+**Publishes:**
 
-| Routing Key | Déclencheur |
-|-------------|-------------|
-| `task.assigned` | Tâche assignée à un membre |
-| `task.deadline.reminder` | Rappel automatique (scheduler, avant deadline) |
+| Routing Key | Trigger |
+|-------------|---------|
+| `task.assigned` | Task assigned to a member |
+| `task.deadline.reminder` | Automatic reminder (scheduler, before deadline) |
 
-**Consomme :** aucun
+**Consumes:** none
 
 ## Configuration
 
@@ -87,28 +87,29 @@ grpc:
     port: 9085
 ```
 
-## Lancer en local
+## Running Locally
 
 ```bash
-# Prérequis : docker compose --profile essential up -d
-# + plantogether-proto et plantogether-common installés
+# Prerequisites: docker compose up -d
+# + plantogether-proto and plantogether-common installed
 
 mvn spring-boot:run
 ```
 
-## Dépendances
+## Dependencies
 
-- **Keycloak 24+** : validation JWT
-- **PostgreSQL 16** (`db_task`) : tâches et sous-tâches
-- **RabbitMQ** : publication d'événements (`task.assigned`, `task.deadline.reminder`)
-- **Redis** : rate limiting (Bucket4j)
-- **Trip Service** (gRPC 9081) : vérification d'appartenance au trip
-- **plantogether-proto** : contrats gRPC (client + serveur)
-- **plantogether-common** : DTOs events, CorsConfig
+- **PostgreSQL 16** (`db_task`): tasks and subtasks
+- **RabbitMQ**: event publishing (`task.assigned`, `task.deadline.reminder`)
+- **Redis**: rate limiting (Bucket4j)
+- **Trip Service** (gRPC 9081): trip membership verification
+- **plantogether-proto**: gRPC contracts (client + server)
+- **plantogether-common**: event DTOs, DeviceIdFilter, SecurityAutoConfiguration, CorsConfig
 
-## Sécurité
+## Security
 
-- Tous les endpoints requièrent un token Bearer Keycloak valide
-- L'appartenance au trip est vérifiée via gRPC avant chaque opération
-- Seul le créateur ou l'ORGANIZER peut supprimer une tâche
-- Zero PII stockée (uniquement des `keycloak_id`)
+- Anonymous device-based identity: `X-Device-Id` header on every request
+- `DeviceIdFilter` (from plantogether-common, auto-configured via `SecurityAutoConfiguration`) extracts the device UUID and sets the SecurityContext principal
+- No JWT, no Keycloak, no login, no sessions
+- Trip membership is verified via gRPC before each operation
+- Only the creator or ORGANIZER can delete a task
+- Zero PII stored (only `device_id` references)
