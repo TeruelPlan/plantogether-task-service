@@ -15,6 +15,13 @@
     <name>plantogether-task-service</name>
     <description>Microservice Task — to-do list, assignments, subtasks</description>
 
+    <scm>
+        <connection>scm:git:https://github.com/TeruelPlan/plantogether-task-service.git</connection>
+        <developerConnection>scm:git:https://github.com/TeruelPlan/plantogether-task-service.git</developerConnection>
+        <url>https://github.com/TeruelPlan/plantogether-task-service</url>
+        <tag>HEAD</tag>
+    </scm>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
