@@ -74,8 +74,11 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/teruelplan/${{ github.event.repository.name }}:${{ inputs.releaseVersion }}
-            ghcr.io/teruelplan/${{ github.event.repository.name }}:latest
+            ghcr.io/teruelplan/plantogether-packages/${{ github.event.repository.name }}:${{ inputs.releaseVersion }}
+            ghcr.io/teruelplan/plantogether-packages/${{ github.event.repository.name }}:latest
+          secrets: |
+            github_actor=${{ github.actor }}
+            github_token=${{ secrets.PACKAGES_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
