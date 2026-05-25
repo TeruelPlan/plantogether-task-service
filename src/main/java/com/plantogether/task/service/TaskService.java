@@ -1,7 +1,10 @@
 package com.plantogether.task.service;
 
 import com.plantogether.common.exception.AccessDeniedException;
+import com.plantogether.common.exception.ResourceNotFoundException;
+import com.plantogether.common.grpc.Role;
 import com.plantogether.common.grpc.TripClient;
+import com.plantogether.common.grpc.TripMembership;
 import com.plantogether.task.domain.Task;
 import com.plantogether.task.domain.TaskPriority;
 import com.plantogether.task.domain.TaskStatus;
@@ -81,6 +84,35 @@ public class TaskService {
               Instant.now()));
     }
 
+    return TaskResponse.from(saved);
+  }
+
+  @Transactional
+  public TaskResponse updateStatus(UUID taskId, String deviceId, TaskStatus newStatus) {
+    Task task =
+        taskRepository
+            .findById(taskId)
+            .orElseThrow(() -> new ResourceNotFoundException("Task not found"));
+
+    TripMembership membership = tripClient.requireMembership(task.getTripId().toString(), deviceId);
+
+    boolean isAssignee =
+        task.getAssigneeId() != null && deviceId.equals(task.getAssigneeId().toString());
+    boolean isOrganizer = membership.role() == Role.ORGANIZER;
+
+    if (!isAssignee && !isOrganizer) {
+      throw new AccessDeniedException(
+          "Only the assignee or the trip organizer can change this task's status");
+    }
+
+    task.setStatus(newStatus);
+    if (newStatus == TaskStatus.DONE) {
+      task.setCompletedAt(Instant.now());
+    } else {
+      task.setCompletedAt(null);
+    }
+
+    Task saved = taskRepository.save(task);
     return TaskResponse.from(saved);
   }
 

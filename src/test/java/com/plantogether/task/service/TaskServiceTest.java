@@ -6,7 +6,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 import com.plantogether.common.exception.AccessDeniedException;
+import com.plantogether.common.exception.ResourceNotFoundException;
+import com.plantogether.common.grpc.Role;
 import com.plantogether.common.grpc.TripClient;
+import com.plantogether.common.grpc.TripMembership;
 import com.plantogether.task.domain.Task;
 import com.plantogether.task.domain.TaskPriority;
 import com.plantogether.task.domain.TaskStatus;
@@ -442,6 +445,222 @@ class TaskServiceTest {
 
     verify(taskRepository, times(1)).findByParentTaskIdInOrderByCreatedAtAsc(any(Collection.class));
     verify(taskRepository, never()).findById(any());
+  }
+
+  // ─── updateStatus tests ───────────────────────────────────────────────────
+
+  @Test
+  void updateStatus_toInProgress_setsStatus_completedAtStaysNull() {
+    UUID taskId = UUID.randomUUID();
+    Task task =
+        Task.builder()
+            .id(taskId)
+            .tripId(TRIP_ID)
+            .title("Buy tickets")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .assigneeId(UUID.fromString(DEVICE_ID))
+            .createdBy(UUID.fromString(DEVICE_ID))
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, UUID.randomUUID().toString()));
+    ArgumentCaptor<Task> captor = ArgumentCaptor.forClass(Task.class);
+    when(taskRepository.save(captor.capture())).thenAnswer(inv -> captor.getValue());
+
+    TaskResponse response = service.updateStatus(taskId, DEVICE_ID, TaskStatus.IN_PROGRESS);
+
+    assertThat(response.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+    assertThat(captor.getValue().getCompletedAt()).isNull();
+  }
+
+  @Test
+  void updateStatus_toDone_setsCompletedAt() {
+    UUID taskId = UUID.randomUUID();
+    Task task =
+        Task.builder()
+            .id(taskId)
+            .tripId(TRIP_ID)
+            .title("Pack bags")
+            .status(TaskStatus.IN_PROGRESS)
+            .priority(TaskPriority.MEDIUM)
+            .assigneeId(UUID.fromString(DEVICE_ID))
+            .createdBy(UUID.fromString(DEVICE_ID))
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, UUID.randomUUID().toString()));
+    ArgumentCaptor<Task> captor = ArgumentCaptor.forClass(Task.class);
+    when(taskRepository.save(captor.capture())).thenAnswer(inv -> captor.getValue());
+
+    TaskResponse response = service.updateStatus(taskId, DEVICE_ID, TaskStatus.DONE);
+
+    assertThat(response.getStatus()).isEqualTo(TaskStatus.DONE);
+    assertThat(captor.getValue().getCompletedAt()).isNotNull();
+  }
+
+  @Test
+  void updateStatus_doneBackToTodo_clearsCompletedAt() {
+    UUID taskId = UUID.randomUUID();
+    Task task =
+        Task.builder()
+            .id(taskId)
+            .tripId(TRIP_ID)
+            .title("Reserve hotel")
+            .status(TaskStatus.DONE)
+            .priority(TaskPriority.MEDIUM)
+            .assigneeId(UUID.fromString(DEVICE_ID))
+            .completedAt(Instant.now())
+            .createdBy(UUID.fromString(DEVICE_ID))
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, UUID.randomUUID().toString()));
+    ArgumentCaptor<Task> captor = ArgumentCaptor.forClass(Task.class);
+    when(taskRepository.save(captor.capture())).thenAnswer(inv -> captor.getValue());
+
+    service.updateStatus(taskId, DEVICE_ID, TaskStatus.TODO);
+
+    assertThat(captor.getValue().getCompletedAt()).isNull();
+  }
+
+  @Test
+  void updateStatus_byOrganizerNotAssignee_succeeds() {
+    UUID taskId = UUID.randomUUID();
+    UUID otherAssignee = UUID.randomUUID();
+    Task task =
+        Task.builder()
+            .id(taskId)
+            .tripId(TRIP_ID)
+            .title("Arrange transport")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.HIGH)
+            .assigneeId(otherAssignee)
+            .createdBy(otherAssignee)
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.ORGANIZER, UUID.randomUUID().toString()));
+    when(taskRepository.save(any(Task.class))).thenAnswer(inv -> inv.getArgument(0));
+
+    TaskResponse response = service.updateStatus(taskId, DEVICE_ID, TaskStatus.IN_PROGRESS);
+
+    assertThat(response.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+    verify(taskRepository).save(any(Task.class));
+  }
+
+  @Test
+  void updateStatus_byMemberNeitherAssigneeNorOrganizer_throws403() {
+    UUID taskId = UUID.randomUUID();
+    UUID otherAssignee = UUID.randomUUID();
+    Task task =
+        Task.builder()
+            .id(taskId)
+            .tripId(TRIP_ID)
+            .title("Get groceries")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.LOW)
+            .assigneeId(otherAssignee)
+            .createdBy(otherAssignee)
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, UUID.randomUUID().toString()));
+
+    assertThatThrownBy(() -> service.updateStatus(taskId, DEVICE_ID, TaskStatus.IN_PROGRESS))
+        .isInstanceOf(AccessDeniedException.class);
+
+    verify(taskRepository, never()).save(any());
+  }
+
+  @Test
+  void updateStatus_byNonMember_throws403() {
+    UUID taskId = UUID.randomUUID();
+    Task task =
+        Task.builder()
+            .id(taskId)
+            .tripId(TRIP_ID)
+            .title("Book flights")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.HIGH)
+            .assigneeId(UUID.fromString(DEVICE_ID))
+            .createdBy(UUID.fromString(DEVICE_ID))
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenThrow(new AccessDeniedException("Not a member of this trip"));
+
+    assertThatThrownBy(() -> service.updateStatus(taskId, DEVICE_ID, TaskStatus.DONE))
+        .isInstanceOf(AccessDeniedException.class);
+
+    verify(taskRepository, never()).save(any());
+  }
+
+  @Test
+  void updateStatus_taskNotFound_throws404() {
+    UUID missingId = UUID.randomUUID();
+    when(taskRepository.findById(missingId)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> service.updateStatus(missingId, DEVICE_ID, TaskStatus.DONE))
+        .isInstanceOf(ResourceNotFoundException.class)
+        .hasMessageContaining("Task not found");
+
+    verify(taskRepository, never()).save(any());
+  }
+
+  @Test
+  void updateStatus_unassignedTask_byOrganizer_succeeds_byPlainMember_throws403() {
+    UUID taskId = UUID.randomUUID();
+    Task task =
+        Task.builder()
+            .id(taskId)
+            .tripId(TRIP_ID)
+            .title("Unassigned task")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .assigneeId(null)
+            .createdBy(UUID.fromString(DEVICE_ID))
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    // Organizer path — should succeed
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.ORGANIZER, UUID.randomUUID().toString()));
+    when(taskRepository.save(any(Task.class))).thenAnswer(inv -> inv.getArgument(0));
+
+    TaskResponse response = service.updateStatus(taskId, DEVICE_ID, TaskStatus.IN_PROGRESS);
+    assertThat(response.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+
+    // Reset and test plain member path — should throw
+    reset(taskRepository, tripClient);
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, UUID.randomUUID().toString()));
+
+    assertThatThrownBy(() -> service.updateStatus(taskId, DEVICE_ID, TaskStatus.IN_PROGRESS))
+        .isInstanceOf(AccessDeniedException.class);
+
+    verify(taskRepository, never()).save(any());
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
