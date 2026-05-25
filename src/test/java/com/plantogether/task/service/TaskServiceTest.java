@@ -15,7 +15,9 @@ import com.plantogether.task.dto.TaskResponse;
 import com.plantogether.task.event.publisher.TaskEventPublisher.TaskAssignedInternalEvent;
 import com.plantogether.task.repository.TaskRepository;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -177,5 +179,287 @@ class TaskServiceTest {
         .isInstanceOf(AccessDeniedException.class);
 
     verify(taskRepository, never()).findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(any());
+  }
+
+  // ─── Subtask creation tests ───────────────────────────────────────────────
+
+  @Test
+  void createSubtask_validParent_setsParentTaskId() {
+    UUID parentId = UUID.randomUUID();
+    Task parent =
+        Task.builder()
+            .id(parentId)
+            .tripId(TRIP_ID)
+            .title("Parent")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findById(parentId)).thenReturn(Optional.of(parent));
+
+    CreateTaskRequest req =
+        CreateTaskRequest.builder().title("Sub-task").parentTaskId(parentId).build();
+    ArgumentCaptor<Task> captor = ArgumentCaptor.forClass(Task.class);
+    when(taskRepository.save(captor.capture()))
+        .thenAnswer(inv -> savedTaskWithParent(req, parentId));
+
+    TaskResponse response = service.createTask(TRIP_ID, DEVICE_ID, req);
+
+    Task saved = captor.getValue();
+    assertThat(saved.getParentTaskId()).isEqualTo(parentId);
+    assertThat(saved.getStatus()).isEqualTo(TaskStatus.TODO);
+    assertThat(response.getParentTaskId()).isEqualTo(parentId);
+  }
+
+  @Test
+  void createSubtask_withAssignee_publishesTaskAssignedEvent() {
+    UUID parentId = UUID.randomUUID();
+    Task parent =
+        Task.builder()
+            .id(parentId)
+            .tripId(TRIP_ID)
+            .title("Parent")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.isMember(TRIP_ID.toString(), ASSIGNEE_ID.toString())).thenReturn(true);
+    when(taskRepository.findById(parentId)).thenReturn(Optional.of(parent));
+
+    CreateTaskRequest req =
+        CreateTaskRequest.builder()
+            .title("Sub with assignee")
+            .parentTaskId(parentId)
+            .assigneeId(ASSIGNEE_ID)
+            .build();
+    when(taskRepository.save(any(Task.class)))
+        .thenAnswer(inv -> savedTaskWithParent(req, parentId));
+
+    service.createTask(TRIP_ID, DEVICE_ID, req);
+
+    ArgumentCaptor<TaskAssignedInternalEvent> captor =
+        ArgumentCaptor.forClass(TaskAssignedInternalEvent.class);
+    verify(eventPublisher).publishEvent(captor.capture());
+    assertThat(captor.getValue().assigneeMemberId()).isEqualTo(ASSIGNEE_ID.toString());
+  }
+
+  @Test
+  void createSubtask_parentNotFound_throws400() {
+    UUID missingParentId = UUID.randomUUID();
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findById(missingParentId)).thenReturn(Optional.empty());
+
+    CreateTaskRequest req =
+        CreateTaskRequest.builder().title("Orphan").parentTaskId(missingParentId).build();
+
+    assertThatThrownBy(() -> service.createTask(TRIP_ID, DEVICE_ID, req))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Parent task not found");
+
+    verify(taskRepository, never()).save(any());
+  }
+
+  @Test
+  void createSubtask_parentInDifferentTrip_throws400() {
+    UUID parentId = UUID.randomUUID();
+    UUID otherTrip = UUID.randomUUID();
+    Task parent =
+        Task.builder()
+            .id(parentId)
+            .tripId(otherTrip)
+            .title("Foreign parent")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findById(parentId)).thenReturn(Optional.of(parent));
+
+    CreateTaskRequest req =
+        CreateTaskRequest.builder().title("Cross-trip sub").parentTaskId(parentId).build();
+
+    assertThatThrownBy(() -> service.createTask(TRIP_ID, DEVICE_ID, req))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("different trip");
+
+    verify(taskRepository, never()).save(any());
+  }
+
+  @Test
+  void createSubtask_parentIsItselfSubtask_throws400() {
+    UUID grandParentId = UUID.randomUUID();
+    UUID parentId = UUID.randomUUID();
+    Task parent =
+        Task.builder()
+            .id(parentId)
+            .tripId(TRIP_ID)
+            .parentTaskId(grandParentId)
+            .title("Already a subtask")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findById(parentId)).thenReturn(Optional.of(parent));
+
+    CreateTaskRequest req =
+        CreateTaskRequest.builder().title("Deep sub").parentTaskId(parentId).build();
+
+    assertThatThrownBy(() -> service.createTask(TRIP_ID, DEVICE_ID, req))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Cannot nest a subtask under another subtask");
+
+    verify(taskRepository, never()).save(any());
+  }
+
+  // ─── Nested list assembly tests ───────────────────────────────────────────
+
+  @Test
+  void listTasks_nestsSubtasksUnderParents_withSummary() {
+    Instant now = Instant.now();
+    UUID parentAId = UUID.randomUUID();
+    UUID parentBId = UUID.randomUUID();
+
+    Task parentA =
+        Task.builder()
+            .id(parentAId)
+            .tripId(TRIP_ID)
+            .title("Parent A")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+    Task parentB =
+        Task.builder()
+            .id(parentBId)
+            .tripId(TRIP_ID)
+            .title("Parent B")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.LOW)
+            .createdBy(UUID.randomUUID())
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+
+    Task child1 =
+        Task.builder()
+            .id(UUID.randomUUID())
+            .tripId(TRIP_ID)
+            .parentTaskId(parentAId)
+            .title("Child 1")
+            .status(TaskStatus.DONE)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+    Task child2 =
+        Task.builder()
+            .id(UUID.randomUUID())
+            .tripId(TRIP_ID)
+            .parentTaskId(parentAId)
+            .title("Child 2")
+            .status(TaskStatus.DONE)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+    Task child3 =
+        Task.builder()
+            .id(UUID.randomUUID())
+            .tripId(TRIP_ID)
+            .parentTaskId(parentAId)
+            .title("Child 3")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(TRIP_ID))
+        .thenReturn(List.of(parentA, parentB));
+    when(taskRepository.findByParentTaskIdInOrderByCreatedAtAsc(any()))
+        .thenReturn(List.of(child1, child2, child3));
+
+    List<TaskResponse> result = service.listTasks(TRIP_ID, DEVICE_ID);
+
+    assertThat(result).hasSize(2);
+
+    TaskResponse responseA = result.get(0);
+    assertThat(responseA.getSubtasks()).hasSize(3);
+    assertThat(responseA.getSubtaskSummary()).isNotNull();
+    assertThat(responseA.getSubtaskSummary().total()).isEqualTo(3);
+    assertThat(responseA.getSubtaskSummary().done()).isEqualTo(2);
+
+    TaskResponse responseB = result.get(1);
+    assertThat(responseB.getSubtasks()).isNull();
+    assertThat(responseB.getSubtaskSummary()).isNull();
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void listTasks_usesBatchChildQuery_notPerParent() {
+    Instant now = Instant.now();
+    UUID parentId = UUID.randomUUID();
+    Task parent =
+        Task.builder()
+            .id(parentId)
+            .tripId(TRIP_ID)
+            .title("Parent")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(TRIP_ID))
+        .thenReturn(List.of(parent));
+    when(taskRepository.findByParentTaskIdInOrderByCreatedAtAsc(any(Collection.class)))
+        .thenReturn(List.of());
+
+    service.listTasks(TRIP_ID, DEVICE_ID);
+
+    verify(taskRepository, times(1)).findByParentTaskIdInOrderByCreatedAtAsc(any(Collection.class));
+    verify(taskRepository, never()).findById(any());
+  }
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────
+
+  private Task savedTaskWithParent(CreateTaskRequest req, UUID parentTaskId) {
+    return Task.builder()
+        .id(UUID.randomUUID())
+        .tripId(TRIP_ID)
+        .parentTaskId(parentTaskId)
+        .title(req.getTitle())
+        .description(req.getDescription())
+        .assigneeId(req.getAssigneeId())
+        .status(TaskStatus.TODO)
+        .priority(req.getPriority() != null ? req.getPriority() : TaskPriority.MEDIUM)
+        .deadline(req.getDeadline())
+        .createdBy(UUID.fromString(DEVICE_ID))
+        .createdAt(Instant.now())
+        .updatedAt(Instant.now())
+        .build();
   }
 }

@@ -25,6 +25,8 @@ public class CreateTaskRequest {
 
   private UUID assigneeId;
 
+  private UUID parentTaskId;
+
   private TaskPriority priority;
 
   private Instant deadline;

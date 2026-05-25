@@ -183,4 +183,151 @@ class TaskControllerTest {
             get("/api/v1/trips/{tripId}/tasks", tripId).header("X-Device-Id", deviceId.toString()))
         .andExpect(status().isForbidden());
   }
+
+  // ─── Subtask controller tests ─────────────────────────────────────────────
+
+  @Test
+  void createSubtask_returns201_withParentTaskIdInBody() throws Exception {
+    UUID parentId = UUID.randomUUID();
+    TaskResponse response =
+        TaskResponse.builder()
+            .id(UUID.randomUUID())
+            .tripId(tripId)
+            .parentTaskId(parentId)
+            .title("Pack bags")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(deviceId)
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+    when(taskService.createTask(eq(tripId), eq(deviceId.toString()), any())).thenReturn(response);
+
+    mockMvc
+        .perform(
+            post("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .contentType("application/json")
+                .content(
+                    """
+                    { "title": "Pack bags", "parentTaskId": "%s" }
+                    """
+                        .formatted(parentId)))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.parentTaskId").value(parentId.toString()));
+  }
+
+  @Test
+  void createSubtask_returns400_whenParentIsSubtask() throws Exception {
+    when(taskService.createTask(eq(tripId), eq(deviceId.toString()), any()))
+        .thenThrow(new IllegalArgumentException("Cannot nest a subtask under another subtask"));
+
+    mockMvc
+        .perform(
+            post("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .contentType("application/json")
+                .content(
+                    """
+                    { "title": "Deep sub", "parentTaskId": "%s" }
+                    """
+                        .formatted(UUID.randomUUID())))
+        .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void createSubtask_returns400_whenParentInOtherTrip() throws Exception {
+    when(taskService.createTask(eq(tripId), eq(deviceId.toString()), any()))
+        .thenThrow(new IllegalArgumentException("Parent task belongs to a different trip"));
+
+    mockMvc
+        .perform(
+            post("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .contentType("application/json")
+                .content(
+                    """
+                    { "title": "Cross trip", "parentTaskId": "%s" }
+                    """
+                        .formatted(UUID.randomUUID())))
+        .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void createSubtask_returns400_withBlankTitle() throws Exception {
+    mockMvc
+        .perform(
+            post("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .contentType("application/json")
+                .content(
+                    """
+                    { "title": "", "parentTaskId": "%s" }
+                    """
+                        .formatted(UUID.randomUUID())))
+        .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void list_returns200_withNestedSubtasksAndSummary() throws Exception {
+    UUID parentId = UUID.randomUUID();
+    UUID childId = UUID.randomUUID();
+
+    TaskResponse child =
+        TaskResponse.builder()
+            .id(childId)
+            .tripId(tripId)
+            .parentTaskId(parentId)
+            .title("Subtask 1")
+            .status(TaskStatus.DONE)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(deviceId)
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .build();
+
+    TaskResponse parent =
+        TaskResponse.builder()
+            .id(parentId)
+            .tripId(tripId)
+            .title("Parent task")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(deviceId)
+            .createdAt(Instant.now())
+            .updatedAt(Instant.now())
+            .subtasks(List.of(child))
+            .subtaskSummary(new TaskResponse.SubtaskSummary(1, 1))
+            .build();
+
+    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()))).thenReturn(List.of(parent));
+
+    mockMvc
+        .perform(
+            get("/api/v1/trips/{tripId}/tasks", tripId).header("X-Device-Id", deviceId.toString()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].subtasks").isArray())
+        .andExpect(jsonPath("$[0].subtasks.length()").value(1))
+        .andExpect(jsonPath("$[0].subtasks[0].title").value("Subtask 1"))
+        .andExpect(jsonPath("$[0].subtaskSummary.total").value(1))
+        .andExpect(jsonPath("$[0].subtaskSummary.done").value(1));
+  }
+
+  @Test
+  void createSubtask_returns403_forNonMember() throws Exception {
+    when(taskService.createTask(eq(tripId), eq(deviceId.toString()), any()))
+        .thenThrow(new AccessDeniedException("Not a member"));
+
+    mockMvc
+        .perform(
+            post("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .contentType("application/json")
+                .content(
+                    """
+                    { "title": "Sub task", "parentTaskId": "%s" }
+                    """
+                        .formatted(UUID.randomUUID())))
+        .andExpect(status().isForbidden());
+  }
 }
