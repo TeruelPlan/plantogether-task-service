@@ -23,6 +23,7 @@
     </scm>
     <properties>
         <plantogether-bom.version>2.0.0</plantogether-bom.version>
+        <plantogether-common.version>2.1.0-SNAPSHOT</plantogether-common.version>
     </properties>
 
 
@@ -35,6 +36,19 @@
                 <version>${plantogether-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- Override BOM: common 2.1.0-SNAPSHOT adds TaskAssignedEvent -->
+            <dependency>
+                <groupId>com.plantogether</groupId>
+                <artifactId>plantogether-common</artifactId>
+                <version>${plantogether-common.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.plantogether</groupId>
+                <artifactId>plantogether-common</artifactId>
+                <version>${plantogether-common.version}</version>
+                <classifier>tests</classifier>
+                <scope>test</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -78,6 +92,22 @@
             <artifactId>plantogether-common</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.plantogether</groupId>
+            <artifactId>plantogether-proto</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
@@ -102,6 +132,11 @@
             <groupId>com.plantogether</groupId>
             <artifactId>plantogether-common</artifactId>
             <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-testing</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

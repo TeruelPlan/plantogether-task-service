@@ -30,6 +30,11 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+grpc:
+  trip-service:
+    host: ${TRIP_SERVICE_GRPC_HOST:localhost}
+    port: ${TRIP_SERVICE_GRPC_PORT:9081}
+
 management:
   endpoints:
     web:
