@@ -117,13 +117,13 @@ public class TaskService {
   }
 
   @Transactional(readOnly = true)
-  public List<TaskResponse> listTasks(UUID tripId, String deviceId) {
+  public List<TaskResponse> listTasks(
+      UUID tripId, String deviceId, UUID assigneeFilter, TaskStatus statusFilter) {
     if (!tripClient.isMember(tripId.toString(), deviceId)) {
       throw new AccessDeniedException("Not a member of this trip");
     }
 
-    List<Task> parents =
-        taskRepository.findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(tripId);
+    List<Task> parents = taskRepository.findTopLevelFiltered(tripId, assigneeFilter, statusFilter);
     if (parents.isEmpty()) {
       return List.of();
     }

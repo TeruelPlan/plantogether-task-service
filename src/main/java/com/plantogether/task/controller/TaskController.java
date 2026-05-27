@@ -1,5 +1,6 @@
 package com.plantogether.task.controller;
 
+import com.plantogether.task.domain.TaskStatus;
 import com.plantogether.task.dto.CreateTaskRequest;
 import com.plantogether.task.dto.TaskResponse;
 import com.plantogether.task.service.TaskService;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,7 +34,11 @@ public class TaskController {
   }
 
   @GetMapping
-  public List<TaskResponse> list(Authentication auth, @PathVariable UUID tripId) {
-    return taskService.listTasks(tripId, auth.getName());
+  public List<TaskResponse> list(
+      Authentication auth,
+      @PathVariable UUID tripId,
+      @RequestParam(required = false) UUID assignee,
+      @RequestParam(required = false) TaskStatus status) {
+    return taskService.listTasks(tripId, auth.getName(), assignee, status);
   }
 }

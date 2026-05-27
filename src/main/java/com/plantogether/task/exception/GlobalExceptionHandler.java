@@ -11,6 +11,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 
 @Slf4j
@@ -51,6 +52,13 @@ public class GlobalExceptionHandler {
             .map(cv -> cv.getPropertyPath() + ": " + cv.getMessage())
             .collect(Collectors.joining(", "));
     return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, msg);
+  }
+
+  @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+  public ProblemDetail handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+    ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+    pd.setDetail("Invalid parameter value: " + ex.getName());
+    return pd;
   }
 
   @ExceptionHandler(HttpMessageNotReadableException.class)

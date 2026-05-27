@@ -2,6 +2,8 @@ package com.plantogether.task.controller;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -149,7 +151,7 @@ class TaskControllerTest {
 
   @Test
   void list_returns200_withTasks() throws Exception {
-    when(taskService.listTasks(eq(tripId), eq(deviceId.toString())))
+    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()), eq(null), eq(null)))
         .thenReturn(List.of(sampleResponse()));
 
     mockMvc
@@ -163,7 +165,8 @@ class TaskControllerTest {
 
   @Test
   void list_returns200_emptyList_whenNoTasks() throws Exception {
-    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()))).thenReturn(List.of());
+    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()), eq(null), eq(null)))
+        .thenReturn(List.of());
 
     mockMvc
         .perform(
@@ -175,7 +178,7 @@ class TaskControllerTest {
 
   @Test
   void list_returns403_forNonMember() throws Exception {
-    when(taskService.listTasks(eq(tripId), eq(deviceId.toString())))
+    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()), eq(null), eq(null)))
         .thenThrow(new AccessDeniedException("Not a member"));
 
     mockMvc
@@ -300,7 +303,8 @@ class TaskControllerTest {
             .subtaskSummary(new TaskResponse.SubtaskSummary(1, 1))
             .build();
 
-    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()))).thenReturn(List.of(parent));
+    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()), eq(null), eq(null)))
+        .thenReturn(List.of(parent));
 
     mockMvc
         .perform(
@@ -328,6 +332,96 @@ class TaskControllerTest {
                     { "title": "Sub task", "parentTaskId": "%s" }
                     """
                         .formatted(UUID.randomUUID())))
+        .andExpect(status().isForbidden());
+  }
+
+  // ─── Filter endpoint tests ────────────────────────────────────────────────
+
+  @Test
+  void list_returns200_filteredByAssignee() throws Exception {
+    UUID assigneeId = UUID.randomUUID();
+    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()), eq(assigneeId), eq(null)))
+        .thenReturn(List.of(sampleResponse()));
+
+    mockMvc
+        .perform(
+            get("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .param("assignee", assigneeId.toString()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(1));
+
+    verify(taskService).listTasks(eq(tripId), eq(deviceId.toString()), eq(assigneeId), eq(null));
+  }
+
+  @Test
+  void list_returns200_filteredByStatus() throws Exception {
+    when(taskService.listTasks(
+            eq(tripId), eq(deviceId.toString()), eq(null), eq(TaskStatus.IN_PROGRESS)))
+        .thenReturn(List.of(sampleResponse()));
+
+    mockMvc
+        .perform(
+            get("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .param("status", "IN_PROGRESS"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(1));
+
+    verify(taskService)
+        .listTasks(eq(tripId), eq(deviceId.toString()), eq(null), eq(TaskStatus.IN_PROGRESS));
+  }
+
+  @Test
+  void list_returns200_unfiltered_whenNoParams() throws Exception {
+    when(taskService.listTasks(eq(tripId), eq(deviceId.toString()), eq(null), eq(null)))
+        .thenReturn(List.of(sampleResponse()));
+
+    mockMvc
+        .perform(
+            get("/api/v1/trips/{tripId}/tasks", tripId).header("X-Device-Id", deviceId.toString()))
+        .andExpect(status().isOk());
+
+    verify(taskService).listTasks(eq(tripId), eq(deviceId.toString()), eq(null), eq(null));
+  }
+
+  @Test
+  void list_returns400_whenStatusUnknownEnum() throws Exception {
+    mockMvc
+        .perform(
+            get("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .param("status", "BOGUS"))
+        .andExpect(status().isBadRequest());
+
+    verify(taskService, never()).listTasks(any(), any(), any(), any());
+  }
+
+  @Test
+  void list_returns400_whenAssigneeMalformedUuid() throws Exception {
+    mockMvc
+        .perform(
+            get("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .param("assignee", "not-a-uuid"))
+        .andExpect(status().isBadRequest());
+
+    verify(taskService, never()).listTasks(any(), any(), any(), any());
+  }
+
+  @Test
+  void list_returns403_forNonMember_withFilters() throws Exception {
+    UUID assigneeId = UUID.randomUUID();
+    when(taskService.listTasks(
+            eq(tripId), eq(deviceId.toString()), eq(assigneeId), eq(TaskStatus.TODO)))
+        .thenThrow(new AccessDeniedException("Not a member"));
+
+    mockMvc
+        .perform(
+            get("/api/v1/trips/{tripId}/tasks", tripId)
+                .header("X-Device-Id", deviceId.toString())
+                .param("assignee", assigneeId.toString())
+                .param("status", "TODO"))
         .andExpect(status().isForbidden());
   }
 }

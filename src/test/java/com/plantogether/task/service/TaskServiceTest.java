@@ -163,25 +163,25 @@ class TaskServiceTest {
             .build();
 
     when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-    when(taskRepository.findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(TRIP_ID))
+    when(taskRepository.findTopLevelFiltered(TRIP_ID, null, null))
         .thenReturn(List.of(newer, older));
 
-    List<TaskResponse> result = service.listTasks(TRIP_ID, DEVICE_ID);
+    List<TaskResponse> result = service.listTasks(TRIP_ID, DEVICE_ID, null, null);
 
     assertThat(result).hasSize(2);
     assertThat(result.get(0).getTitle()).isEqualTo("Newer task");
     assertThat(result.get(1).getTitle()).isEqualTo("Older task");
-    verify(taskRepository).findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(TRIP_ID);
+    verify(taskRepository).findTopLevelFiltered(TRIP_ID, null, null);
   }
 
   @Test
   void list_nonMember_throwsAccessDenied() {
     when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(false);
 
-    assertThatThrownBy(() -> service.listTasks(TRIP_ID, DEVICE_ID))
+    assertThatThrownBy(() -> service.listTasks(TRIP_ID, DEVICE_ID, null, null))
         .isInstanceOf(AccessDeniedException.class);
 
-    verify(taskRepository, never()).findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(any());
+    verify(taskRepository, never()).findTopLevelFiltered(any(), any(), any());
   }
 
   // ─── Subtask creation tests ───────────────────────────────────────────────
@@ -398,12 +398,12 @@ class TaskServiceTest {
             .build();
 
     when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-    when(taskRepository.findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(TRIP_ID))
+    when(taskRepository.findTopLevelFiltered(TRIP_ID, null, null))
         .thenReturn(List.of(parentA, parentB));
     when(taskRepository.findByParentTaskIdInOrderByCreatedAtAsc(any()))
         .thenReturn(List.of(child1, child2, child3));
 
-    List<TaskResponse> result = service.listTasks(TRIP_ID, DEVICE_ID);
+    List<TaskResponse> result = service.listTasks(TRIP_ID, DEVICE_ID, null, null);
 
     assertThat(result).hasSize(2);
 
@@ -436,12 +436,11 @@ class TaskServiceTest {
             .build();
 
     when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-    when(taskRepository.findByTripIdAndParentTaskIdIsNullOrderByCreatedAtDesc(TRIP_ID))
-        .thenReturn(List.of(parent));
+    when(taskRepository.findTopLevelFiltered(TRIP_ID, null, null)).thenReturn(List.of(parent));
     when(taskRepository.findByParentTaskIdInOrderByCreatedAtAsc(any(Collection.class)))
         .thenReturn(List.of());
 
-    service.listTasks(TRIP_ID, DEVICE_ID);
+    service.listTasks(TRIP_ID, DEVICE_ID, null, null);
 
     verify(taskRepository, times(1)).findByParentTaskIdInOrderByCreatedAtAsc(any(Collection.class));
     verify(taskRepository, never()).findById(any());
@@ -661,6 +660,102 @@ class TaskServiceTest {
         .isInstanceOf(AccessDeniedException.class);
 
     verify(taskRepository, never()).save(any());
+  }
+
+  // ─── Filter tests ────────────────────────────────────────────────────────
+
+  @Test
+  void listTasks_noFilters_returnsAllTopLevel_nested() {
+    Instant now = Instant.now();
+    UUID parentId = UUID.randomUUID();
+    Task parent =
+        Task.builder()
+            .id(parentId)
+            .tripId(TRIP_ID)
+            .title("Top level")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+    Task child =
+        Task.builder()
+            .id(UUID.randomUUID())
+            .tripId(TRIP_ID)
+            .parentTaskId(parentId)
+            .title("Child task")
+            .status(TaskStatus.TODO)
+            .priority(TaskPriority.MEDIUM)
+            .createdBy(UUID.randomUUID())
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findTopLevelFiltered(TRIP_ID, null, null)).thenReturn(List.of(parent));
+    when(taskRepository.findByParentTaskIdInOrderByCreatedAtAsc(any())).thenReturn(List.of(child));
+
+    List<TaskResponse> result = service.listTasks(TRIP_ID, DEVICE_ID, null, null);
+
+    verify(taskRepository).findTopLevelFiltered(TRIP_ID, null, null);
+    assertThat(result).hasSize(1);
+    assertThat(result.get(0).getSubtasks()).hasSize(1);
+  }
+
+  @Test
+  void listTasks_assigneeFilter_passesAssigneeToRepo() {
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findTopLevelFiltered(TRIP_ID, ASSIGNEE_ID, null)).thenReturn(List.of());
+
+    service.listTasks(TRIP_ID, DEVICE_ID, ASSIGNEE_ID, null);
+
+    verify(taskRepository).findTopLevelFiltered(TRIP_ID, ASSIGNEE_ID, null);
+  }
+
+  @Test
+  void listTasks_statusFilter_passesStatusToRepo() {
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findTopLevelFiltered(TRIP_ID, null, TaskStatus.IN_PROGRESS))
+        .thenReturn(List.of());
+
+    service.listTasks(TRIP_ID, DEVICE_ID, null, TaskStatus.IN_PROGRESS);
+
+    verify(taskRepository).findTopLevelFiltered(TRIP_ID, null, TaskStatus.IN_PROGRESS);
+  }
+
+  @Test
+  void listTasks_bothFilters_combineAnd() {
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findTopLevelFiltered(TRIP_ID, ASSIGNEE_ID, TaskStatus.DONE))
+        .thenReturn(List.of());
+
+    service.listTasks(TRIP_ID, DEVICE_ID, ASSIGNEE_ID, TaskStatus.DONE);
+
+    verify(taskRepository).findTopLevelFiltered(TRIP_ID, ASSIGNEE_ID, TaskStatus.DONE);
+  }
+
+  @Test
+  void listTasks_noMatch_returnsEmpty_noChildQuery() {
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(taskRepository.findTopLevelFiltered(TRIP_ID, ASSIGNEE_ID, TaskStatus.IN_PROGRESS))
+        .thenReturn(List.of());
+
+    List<TaskResponse> result =
+        service.listTasks(TRIP_ID, DEVICE_ID, ASSIGNEE_ID, TaskStatus.IN_PROGRESS);
+
+    assertThat(result).isEmpty();
+    verify(taskRepository, never()).findByParentTaskIdInOrderByCreatedAtAsc(any());
+  }
+
+  @Test
+  void listTasks_nonMember_throws403() {
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(false);
+
+    assertThatThrownBy(() -> service.listTasks(TRIP_ID, DEVICE_ID, ASSIGNEE_ID, TaskStatus.TODO))
+        .isInstanceOf(AccessDeniedException.class);
+
+    verify(taskRepository, never()).findTopLevelFiltered(any(), any(), any());
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
