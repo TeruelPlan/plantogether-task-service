@@ -30,8 +30,18 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+grpc:
+  trip-service:
+    host: ${TRIP_SERVICE_GRPC_HOST:localhost}
+    port: ${TRIP_SERVICE_GRPC_PORT:9081}
+
 management:
   endpoints:
     web:
       exposure:
         include: health,info,metrics,prometheus
+
+task:
+  reminder:
+    cron: ${TASK_REMINDER_CRON:0 0 * * * *}
+    window-hours: ${TASK_REMINDER_WINDOW_HOURS:24}
