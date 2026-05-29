@@ -62,6 +62,9 @@ public class Task {
   @Column(name = "completed_at")
   private Instant completedAt;
 
+  @Column(name = "reminder_sent_at")
+  private Instant reminderSentAt;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 

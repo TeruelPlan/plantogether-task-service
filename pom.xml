@@ -22,11 +22,8 @@
         <tag>HEAD</tag>
     </scm>
     <properties>
-        <plantogether-bom.version>2.0.0</plantogether-bom.version>
-        <plantogether-common.version>2.1.0-SNAPSHOT</plantogether-common.version>
+        <plantogether-bom.version>1.8.0</plantogether-bom.version>
     </properties>
-
-
 
     <dependencyManagement>
         <dependencies>
@@ -36,19 +33,6 @@
                 <version>${plantogether-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
-            </dependency>
-            <!-- Override BOM: common 2.1.0-SNAPSHOT adds TaskAssignedEvent -->
-            <dependency>
-                <groupId>com.plantogether</groupId>
-                <artifactId>plantogether-common</artifactId>
-                <version>${plantogether-common.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.plantogether</groupId>
-                <artifactId>plantogether-common</artifactId>
-                <version>${plantogether-common.version}</version>
-                <classifier>tests</classifier>
-                <scope>test</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -137,6 +121,21 @@
         <dependency>
             <groupId>io.grpc</groupId>
             <artifactId>grpc-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

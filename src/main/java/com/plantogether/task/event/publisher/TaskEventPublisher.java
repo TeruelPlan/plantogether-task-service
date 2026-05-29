@@ -1,6 +1,7 @@
 package com.plantogether.task.event.publisher;
 
 import com.plantogether.common.event.TaskAssignedEvent;
+import com.plantogether.common.event.TaskDeadlineReminderEvent;
 import com.plantogether.task.config.RabbitConfig;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -43,6 +44,24 @@ public class TaskEventPublisher {
     publish(RabbitConfig.ROUTING_KEY_TASK_ASSIGNED, event, internal.taskId(), internal.tripId());
   }
 
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  public void publishTaskDeadlineReminder(TaskDeadlineReminderInternalEvent internal) {
+    TaskDeadlineReminderEvent event =
+        TaskDeadlineReminderEvent.builder()
+            .taskId(internal.taskId())
+            .tripId(internal.tripId())
+            .assigneeMemberId(internal.assigneeMemberId())
+            .title(internal.title())
+            .deadline(internal.deadline())
+            .reminderAt(internal.reminderAt())
+            .build();
+    publish(
+        RabbitConfig.ROUTING_KEY_TASK_DEADLINE_REMINDER,
+        event,
+        internal.taskId(),
+        internal.tripId());
+  }
+
   private void publish(String routingKey, Object event, UUID taskId, UUID tripId) {
     try {
       rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE, routingKey, event);
@@ -65,4 +84,12 @@ public class TaskEventPublisher {
       String title,
       Instant deadline,
       Instant assignedAt) {}
+
+  public record TaskDeadlineReminderInternalEvent(
+      UUID taskId,
+      UUID tripId,
+      String assigneeMemberId,
+      String title,
+      Instant deadline,
+      Instant reminderAt) {}
 }
