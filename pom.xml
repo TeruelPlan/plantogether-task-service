@@ -22,10 +22,8 @@
         <tag>HEAD</tag>
     </scm>
     <properties>
-        <plantogether-bom.version>2.0.0</plantogether-bom.version>
+        <plantogether-bom.version>1.8.0</plantogether-bom.version>
     </properties>
-
-
 
     <dependencyManagement>
         <dependencies>
@@ -78,6 +76,22 @@
             <artifactId>plantogether-common</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.plantogether</groupId>
+            <artifactId>plantogether-proto</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
@@ -102,6 +116,26 @@
             <groupId>com.plantogether</groupId>
             <artifactId>plantogether-common</artifactId>
             <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
