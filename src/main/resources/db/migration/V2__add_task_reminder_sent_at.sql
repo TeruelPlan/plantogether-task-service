@@ -1,0 +1,1 @@
+ALTER TABLE task ADD COLUMN reminder_sent_at TIMESTAMP WITH TIME ZONE;
